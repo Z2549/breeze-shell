@@ -16,7 +16,7 @@ local USE_LOCAL_BREEZE_UI = os.exists(BREEZE_UI_LOCAL_PATH)
 -- This patch pins the requirement back to 0.1.36 (the version breeze-shell itself
 -- already pins in its root xmake.lua).
 local BREEZE_UI_GLAD_PATCH = path.join(os.scriptdir(), "patches", "breeze-ui-pin-glad-0.1.36.patch")
-local BREEZE_UI_GLAD_PATCH_SHA256 = "6a2965eff8bf355edf46b0b788a3fe5c4f5af5fa1eed5fdd99c6b094a4adc653"
+local BREEZE_UI_GLAD_PATCH_SHA256 = "59bab66cb2ef6ed42e9e9ad9a6ed5567ebf2f99f80f50e30955c0937e45f3683"
 
 package("breeze-nanosvg")
     if USE_LOCAL_BREEZE_UI then
