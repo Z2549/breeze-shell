@@ -14,6 +14,12 @@ jobs:
   build:
     runs-on: windows-2025
 
+    # 未配置 SENTRY_AUTH_TOKEN 时（例如 fork），跳过 sentry 相关步骤，
+    # 否则最后一步必然失败、把整轮 CI 标成 failure，而实际上产物早已上传成功。
+    # 注意：secrets 不能在 if 表达式中直接引用，必须先落到 env 再判断。
+    env:
+      HAS_SENTRY: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+
     steps:
     - uses: actions/checkout@v4
       with:
@@ -49,9 +55,11 @@ jobs:
         name: windows-build
 
     - name: Setup Scoop
+      if: env.HAS_SENTRY == 'true'
       uses: MinoruSekine/setup-scoop@v1
 
     - name: Upload PDBs to Sentry
+      if: env.HAS_SENTRY == 'true'
       shell: pwsh
       env:
         SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
