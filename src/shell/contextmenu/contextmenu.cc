@@ -16,7 +16,9 @@
 #include "shell/entry.h"
 
 #include <consoleapi.h>
+#include <cstdlib>
 #include <debugapi.h>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <spdlog/spdlog.h>
@@ -28,6 +30,42 @@
 #include <variant>
 
 namespace mb_shell {
+// ============================ TEMPORARY ================================
+// Diagnostics only, to pin down why a deferred submenu such as "Send To"
+// ends up seeded with the contents of the user profile.  Remove before
+// upstreaming.
+namespace {
+std::string diag_window_class(HWND hWnd) {
+    if (!hWnd)
+        return "<null>";
+    wchar_t buffer[256] = {};
+    if (!GetClassNameW(hWnd, buffer, 256))
+        return "<unknown>";
+    return wstring_to_utf8(buffer);
+}
+
+// 0 = current behaviour; see submenu-strategy.txt next to config.json.
+int diag_strategy() {
+    static std::string path = []() -> std::string {
+        auto profile = std::getenv("USERPROFILE");
+        if (!profile)
+            return {};
+        std::string result = profile;
+        result += "\\.breeze-shell\\submenu-strategy.txt";
+        return result;
+    }();
+    if (path.empty())
+        return 0;
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        return 0;
+    int value = 0;
+    in >> value;
+    return value;
+}
+} // namespace
+// =======================================================================
+
 owner_draw_menu_info getBitmapFromOwnerDraw(MENUITEMINFOW *menuItemInfo,
                                             HWND hwnd) {
     owner_draw_menu_info result = {{}, 0, 0};
@@ -144,10 +182,57 @@ menu menu::construct_with_hmenu(
             SendMessageW(hWnd, message, wParam, lParam);
         };
 
-    if (send_init_msg) {
-        HandleMenuMsg(WM_INITMENUPOPUP, reinterpret_cast<WPARAM>(hMenu),
-                      init_popup_lparam);
+    // ============================ TEMPORARY ============================
+    const int diag_mode = diag_strategy();
+    if (diag_mode == 3 && is_top) {
+        auto root = GetAncestor(hWnd, GA_ROOT);
+        if (root && root != hWnd) {
+            spdlog::info("[diag] mode 3: retarget init msg {} ({}) -> {} ({})",
+                         (void *)hWnd, diag_window_class(hWnd), (void *)root,
+                         diag_window_class(root));
+            hWnd = root;
+            HandleMenuMsg = [=](int message, WPARAM wParam, LPARAM lParam) {
+                SendMessageW(hWnd, message, wParam, lParam);
+            };
+        }
     }
+
+    const int count_before = GetMenuItemCount(hMenu);
+    auto effective_lparam = init_popup_lparam;
+    bool effective_send = send_init_msg;
+    if (diag_mode == 1 && !is_top && count_before > 0)
+        effective_send = false;
+    if (diag_mode == 2 && !is_top)
+        effective_send = false;
+    if (diag_mode == 4 && is_top)
+        effective_lparam = 0;
+    if (diag_mode == 5 && !is_top)
+        effective_lparam = MAKELPARAM(0, 0);
+
+    if (effective_send) {
+        HandleMenuMsg(WM_INITMENUPOPUP, reinterpret_cast<WPARAM>(hMenu),
+                      effective_lparam);
+    }
+    const int count_after = GetMenuItemCount(hMenu);
+
+    spdlog::info(
+        "[diag] {} hMenu={} hWnd={}({}) lParam=0x{:x}(pos={},winmenu={}) "
+        "send={}->{} count {} -> {}",
+        is_top ? "TOP  " : "SUBMN", (void *)hMenu, (void *)hWnd,
+        diag_window_class(hWnd),
+        (unsigned long long)(unsigned long)effective_lparam,
+        (int)((unsigned long)effective_lparam & 0xffff),
+        (int)(((unsigned long)effective_lparam >> 16) & 0xffff), send_init_msg,
+        effective_send, count_before, count_after);
+    if (is_top) {
+        auto parent = GetParent(hWnd);
+        auto root = GetAncestor(hWnd, GA_ROOT);
+        spdlog::info("[diag]   parent={}({}) root={}({})", (void *)parent,
+                     diag_window_class(parent), (void *)root,
+                     diag_window_class(root));
+    }
+    // ===================================================================
+
     for (int i = 0; i < GetMenuItemCount(hMenu); i++) {
         menu_item item;
         wchar_t buffer[256];
@@ -160,6 +245,15 @@ menu menu::construct_with_hmenu(
             spdlog::warn( "Failed to get menu item info: %lu", GetLastError());
             continue;
         }
+
+        // ========================== TEMPORARY ==========================
+        spdlog::info("[diag]   {}{:>3} wID={} fType=0x{:x} fState=0x{:x} "
+                     "data={} sub={} name='{}'",
+                     is_top ? "top" : "sub", i, info.wID, (unsigned)info.fType,
+                     (unsigned)info.fState, (void *)info.dwItemData,
+                     (void *)info.hSubMenu,
+                     wstring_to_utf8(strip_extra_infos(buffer)));
+        // ===============================================================
 
         if ((info.fType & MFT_OWNERDRAW) &&
             config::current->context_menu.experimental_ownerdraw_support) {
